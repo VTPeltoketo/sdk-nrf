@@ -21,7 +21,7 @@
 LOG_MODULE_REGISTER(slm_fota, CONFIG_SLM_LOG_LEVEL);
 
 /* file_uri: scheme://hostname[:port]path[?parameters] */
-#define FILE_URI_MAX	2048
+#define FILE_URI_MAX	CONFIG_DOWNLOAD_CLIENT_MAX_FILENAME_SIZE
 #define SCHEMA_HTTP	"http"
 #define SCHEMA_HTTPS	"https"
 #define URI_HOST_MAX	CONFIG_DOWNLOAD_CLIENT_MAX_HOSTNAME_SIZE
@@ -178,6 +178,13 @@ static int do_fota_start(int op, const char *file_uri, int sec_tag,
 	};
 	char schema[URI_SCHEMA_MAX];
 
+#if defined(CONFIG_SECURE_BOOT)
+	char *delimiter;
+	char *last;
+	uint16_t path_size;
+	int move_size;
+#endif
+
 	http_parser_url_init(&parser);
 	ret = http_parser_parse_url(file_uri, strlen(file_uri), 0, &parser);
 	if (ret) {
@@ -224,27 +231,31 @@ static int do_fota_start(int op, const char *file_uri, int sec_tag,
 	/* When download MCUBOOT bootloader, S0 and S1 must be separated by "+"
 	 * Convert "+" to " " SPACE as this is required in fota_download
 	 */
-	char *delimiter = strstr(path, "+");
-
+	delimiter = strstr(path, "+");
 	if (delimiter == NULL) {
 		LOG_ERR("Invalid S0/S1 string");
 		return -EINVAL;
 	}
-
 	*delimiter = ' ';
 
 	/* When download MCUBOOT bootloader, S0 and S1 must be two full filepath
 	 * as this is required in fota_download
 	 */
-	char *tmp = strrchr(path, '/');
-
-	if (tmp != NULL) {
-		char path2[FILE_URI_MAX] = { 0 };
-
-		memcpy(path2, path, tmp - path + 1);
-		tmp = delimiter + 1;
-		strcat(path2, tmp);
-		strcpy(tmp, path2);
+	last = strrchr(path, '/');
+	if (last != NULL) {
+		path_size = last + 1 - path;
+		move_size = path + strlen(path) - delimiter;
+		if ((strlen(path) + path_size) < sizeof(path)) {
+			/* Move the second file name further to make space for path */
+			memmove(delimiter + path_size, delimiter, move_size);
+			/* Move the path in the beginning of the second file */
+			memcpy(delimiter + 1, path, path_size);
+			LOG_DBG("Extended path to download: %s", path);
+		} else {
+			LOG_ERR("URL path length %d too long, exceeds the max length of %d",
+					strlen(path) + path_size, FILE_URI_MAX);
+			return -ENOMEM;
+		}
 	}
 #endif
 
@@ -381,6 +392,9 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 				err = do_fota_start(op, uri, sec_tag, pdn_id, type);
 			} else {
 				err = do_fota_start(op, uri, sec_tag, 0, type);
+			}
+			if (err) {
+				return err;
 			}
 #if defined(CONFIG_SECURE_BOOT)
 			if (op == SLM_FOTA_START_BL) {

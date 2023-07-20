@@ -256,7 +256,8 @@ static int handle_at_modemreset(enum at_cmd_type type)
 		++step;
 
 		if (ret > 0 || (fota_stage != FOTA_STAGE_INIT
-					&& fota_type == DFU_TARGET_IMAGE_TYPE_MODEM_DELTA)) {
+					&& (fota_type == DFU_TARGET_IMAGE_TYPE_MODEM_DELTA ||
+					    fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM))) {
 			slm_finish_modem_fota(ret);
 			slm_fota_post_process();
 		}

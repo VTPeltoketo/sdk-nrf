@@ -11,7 +11,10 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/net/tls_credentials.h>
 #include <zephyr/net/http/parser_url.h>
+#include <zephyr/device.h>
 #include <net/fota_download.h>
+#include <dfu/dfu_target_full_modem.h>
+#include <dfu/fmfu_fdev.h>
 #include "slm_util.h"
 #include "slm_settings.h"
 #include "slm_at_host.h"
@@ -38,14 +41,22 @@ enum slm_fota_operation {
 	SLM_FOTA_START_MFW = 2,
 	SLM_FOTA_PAUSE_RESUME = 4,
 	SLM_FOTA_MFW_READ = 7,
-	SLM_FOTA_ERASE_MFW = 9
+	SLM_FOTA_ERASE_MFW = 9,
+	SLM_FOTA_FULL_FOTA = 10
 };
 
 static char path[FILE_URI_MAX];
 static char hostname[URI_HOST_MAX];
 
-/* global variable defined in different files */
+/* Global variable defined in different files */
 extern struct at_param_list at_param_list;
+
+/* DRAFT by Vepe, this should be removed and existing Fota buffers should be used */
+#define FMFU_BUF_SIZE (0x1000)
+static uint8_t fmfu_buf[FMFU_BUF_SIZE];
+
+/* External flash devide for full fota storage */
+static const struct device *flash_dev = DEVICE_DT_GET_ONE(jedec_spi_nor);
 
 static int do_fota_mfw_read(void)
 {
@@ -281,7 +292,8 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 		}
 		if (op == SLM_FOTA_STOP) {
 			err = fota_download_cancel();
-		} else if (op == SLM_FOTA_START_APP || op == SLM_FOTA_START_MFW) {
+		} else if (op == SLM_FOTA_START_APP || op == SLM_FOTA_START_MFW ||
+			   op == SLM_FOTA_FULL_FOTA) {
 			char uri[FILE_URI_MAX];
 			uint16_t pdn_id;
 			int size = FILE_URI_MAX;
@@ -297,6 +309,27 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 			}
 			if (op == SLM_FOTA_START_APP) {
 				type = DFU_TARGET_IMAGE_TYPE_MCUBOOT;
+			} else if (op == SLM_FOTA_FULL_FOTA)  {
+				if (!device_is_ready(flash_dev)) {
+					LOG_ERR("Flash device %s not ready\n", flash_dev->name);
+					return -ENXIO;
+					}
+
+				const struct dfu_target_full_modem_params params = {
+					.buf = fmfu_buf,
+					.len = sizeof(fmfu_buf),
+					.dev = &(struct dfu_target_fmfu_fdev){ .dev = flash_dev,
+									.offset = 0,
+									.size = 0 }
+					};
+
+				err = dfu_target_full_modem_cfg(&params);
+				if (err != 0) {
+					LOG_ERR("dfu_target_full_modem_cfg failed: %d\n", err);
+					return err;
+				}
+
+				type = DFU_TARGET_IMAGE_TYPE_FULL_MODEM;
 			} else {
 				type = DFU_TARGET_IMAGE_TYPE_MODEM_DELTA;
 			}
@@ -326,9 +359,9 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 		} break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		rsp_send("\r\n#XFOTA: (%d,%d,%d,%d,%d)[,<file_url>[,<sec_tag>[,<pdn_id>]]]\r\n",
+		rsp_send("\r\n#XFOTA: (%d,%d,%d,%d,%d,%d)[,<file_url>[,<sec_tag>[,<pdn_id>]]]\r\n",
 			SLM_FOTA_STOP, SLM_FOTA_START_APP, SLM_FOTA_START_MFW,
-			SLM_FOTA_MFW_READ, SLM_FOTA_ERASE_MFW);
+			SLM_FOTA_MFW_READ, SLM_FOTA_ERASE_MFW, SLM_FOTA_FULL_FOTA);
 		err = 0;
 		break;
 
@@ -375,27 +408,72 @@ void slm_fota_post_process(void)
 
 void slm_finish_modem_fota(int modem_lib_init_ret)
 {
-	if (handle_nrf_modem_lib_init_ret(modem_lib_init_ret)) {
+	int err;
+
+	if (handle_nrf_modem_lib_init_ret(modem_lib_init_ret) ||
+	   (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM)) {
 		char buf[40];
 
 		LOG_INF("Re-initializing the modem due to"
 				" ongoing modem firmware update.");
 
-		/* The second init needs to be done regardless of the return value.
-		 * Refer to the below link for more information on the procedure.
-		 * https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrfxlib/nrf_modem/doc/delta_dfu.html#reinitializing-the-modem-to-run-the-new-firmware
-		 */
-		modem_lib_init_ret = nrf_modem_lib_init();
-		handle_nrf_modem_lib_init_ret(modem_lib_init_ret);
+		if (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM){
+			/* Full fota activation differs from delta modem fota. */
 
-		nrf_modem_at_cmd(buf, sizeof(buf), "%s", "AT%SHORTSWVER");
-		if (strstr(buf, "1.3.4") || strstr(buf, "1.3.5")) {
-			/* Those versions suffer from a bug that provokes UICC failure (+CEREG: 90)
-			 * after the update, preventing the modem from registering to the network.
-			 */
-			LOG_INF("Applying the workaround to a modem firmware update issue...");
-			nrf_modem_lib_shutdown();
-			nrf_modem_lib_init();
+			LOG_INF("Applying full modem firmware update from external flash\n");
+
+			err = nrf_modem_lib_shutdown();
+			if (err != 0) {
+				LOG_ERR("nrf_modem_lib_shutdown() failed: %d\n", err);
+				return;
+			}
+
+			err = nrf_modem_lib_bootloader_init();
+			if (err != 0) {
+				LOG_ERR("nrf_modem_lib_bootloader_init() failed: %d\n", err);
+				return;
+			}
+
+			/* Loading data from external flash to modem's flash. */
+			err = fmfu_fdev_load(fmfu_buf, sizeof(fmfu_buf), flash_dev, 0);
+			if (err != 0) {
+				LOG_ERR("fmfu_fdev_load failed: %d\n", err);
+				return;
+			}
+
+			err = nrf_modem_lib_shutdown();
+			if (err != 0) {
+				LOG_ERR("nrf_modem_lib_shutdown() failed: %d\n", err);
+				return;
+			}
+
+			err = nrf_modem_lib_init();
+			if (err != 0) {
+				LOG_ERR("nrf_modem_lib_init() failed: %d\n", err);
+				return;
+			}
+
+			LOG_INF("MODEM UPDATE OK. Will run new firmware");
+			fota_stage = FOTA_STAGE_COMPLETE;
+			fota_status = FOTA_STATUS_OK;
+			fota_info = 0;
+		} else {
+			/* The second init needs to be done regardless of the return value.
+			* Refer to the below link for more information on the procedure.
+			* https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrfxlib/nrf_modem/doc/delta_dfu.html#reinitializing-the-modem-to-run-the-new-firmware
+			*/
+			modem_lib_init_ret = nrf_modem_lib_init();
+			handle_nrf_modem_lib_init_ret(modem_lib_init_ret);
+
+			nrf_modem_at_cmd(buf, sizeof(buf), "%s", "AT%SHORTSWVER");
+			if (strstr(buf, "1.3.4") || strstr(buf, "1.3.5")) {
+				/* Those versions suffer from a bug that provokes UICC failure (+CEREG: 90)
+				* after the update, preventing the modem from registering to the network.
+				*/
+				LOG_INF("Applying the workaround to a modem firmware update issue...");
+				nrf_modem_lib_shutdown();
+				nrf_modem_lib_init();
+			}
 		}
 	}
 }

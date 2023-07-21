@@ -324,7 +324,7 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 					};
 
 				err = dfu_target_full_modem_cfg(&params);
-				if (err != 0) {
+				if (err != 0 && err != -EALREADY) {
 					LOG_ERR("dfu_target_full_modem_cfg failed: %d\n", err);
 					return err;
 				}

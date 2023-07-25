@@ -419,7 +419,6 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 
 		if (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM){
 			/* Full fota activation differs from delta modem fota. */
-
 			LOG_INF("Applying full modem firmware update from external flash\n");
 
 			err = nrf_modem_lib_shutdown();
@@ -452,11 +451,19 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 				LOG_ERR("nrf_modem_lib_init() failed: %d\n", err);
 				return;
 			}
-
-			LOG_INF("MODEM UPDATE OK. Will run new firmware");
 			fota_stage = FOTA_STAGE_COMPLETE;
 			fota_status = FOTA_STATUS_OK;
 			fota_info = 0;
+			LOG_INF("Full modem firmware update succeeded. Will run new firmware");
+
+			/* Extenal flash needs to be erased and internal counters like offset
+			cleared */
+			err = dfu_target_reset();
+			if (err != 0) {
+				LOG_ERR("dfu_target_reset() failed: %d\n", err);
+			} else {
+				LOG_INF("External flash erase succeeded");
+			}
 		} else {
 			/* The second init needs to be done regardless of the return value.
 			* Refer to the below link for more information on the procedure.

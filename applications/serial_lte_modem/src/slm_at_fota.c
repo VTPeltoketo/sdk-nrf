@@ -417,7 +417,7 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 
 		LOG_INF("Re-initializing the modem due to ongoing modem firmware update.");
 
-		if (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM){
+		if (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM) {
 			/* Full fota activation differs from delta modem fota. */
 			LOG_INF("Applying full modem firmware update from external flash\n");
 
@@ -465,16 +465,19 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 			}
 		} else {
 			/* The second init needs to be done regardless of the return value.
-			* Refer to the below link for more information on the procedure.
-			* https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrfxlib/nrf_modem/doc/delta_dfu.html#reinitializing-the-modem-to-run-the-new-firmware
+			 * Refer to the below link for more information on the procedure.
+			 * https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrfxlib/
+			 * nrf_modem/doc/delta_dfu.html
+			 * #reinitializing-the-modem-to-run-the-new-firmware
 			*/
 			modem_lib_init_ret = nrf_modem_lib_init();
 			handle_nrf_modem_lib_init_ret(modem_lib_init_ret);
 
 			nrf_modem_at_cmd(buf, sizeof(buf), "%s", "AT%SHORTSWVER");
 			if (strstr(buf, "1.3.4") || strstr(buf, "1.3.5")) {
-				/* Those versions suffer from a bug that provokes UICC failure (+CEREG: 90)
-				* after the update, preventing the modem from registering to the network.
+				/* Those versions suffer from a bug that provokes UICC failure
+				 * (+CEREG: 90) after the update, preventing the modem from
+				 * registering to the network.
 				*/
 				LOG_INF("Applying the workaround to a modem firmware update issue...");
 				nrf_modem_lib_shutdown();

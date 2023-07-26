@@ -35,6 +35,9 @@ LOG_MODULE_REGISTER(slm_fota, CONFIG_SLM_LOG_LEVEL);
 /* Some features need fota_download update */
 #define FOTA_FUTURE_FEATURE	0
 
+/* For extenal flash writing */
+#define FMFU_BUF_SIZE	512
+
 enum slm_fota_operation {
 	SLM_FOTA_STOP = 0,
 	SLM_FOTA_START_APP = 1,
@@ -51,8 +54,9 @@ static char hostname[URI_HOST_MAX];
 /* Global variable defined in different files */
 extern struct at_param_list at_param_list;
 
-/* DRAFT by Vepe, this should be removed and existing Fota buffers should be used */
-#define FMFU_BUF_SIZE (0x1000)
+/* Buffer used as temporary storage when downloading the modem firmware, and
+ * when loading the modem firmware from external flash to the modem.
+ */
 static uint8_t fmfu_buf[FMFU_BUF_SIZE];
 
 /* External flash devide for full fota storage */
@@ -280,6 +284,11 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 {
 	int err = -EINVAL;
 	uint16_t op;
+	const struct dfu_target_full_modem_params full_modem_fota_params = {
+		.buf = fmfu_buf,
+		.len = sizeof(fmfu_buf),
+		.dev = &(struct dfu_target_fmfu_fdev){ .dev = flash_dev, .offset = 0, .size = 0 }
+	};
 #if FOTA_FUTURE_FEATURE
 	static bool paused;
 #endif
@@ -315,15 +324,7 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 					return -ENXIO;
 					}
 
-				const struct dfu_target_full_modem_params params = {
-					.buf = fmfu_buf,
-					.len = sizeof(fmfu_buf),
-					.dev = &(struct dfu_target_fmfu_fdev){ .dev = flash_dev,
-									.offset = 0,
-									.size = 0 }
-					};
-
-				err = dfu_target_full_modem_cfg(&params);
+				err = dfu_target_full_modem_cfg(&full_modem_fota_params);
 				if (err != 0 && err != -EALREADY) {
 					LOG_ERR("dfu_target_full_modem_cfg failed: %d\n", err);
 					return err;
@@ -409,13 +410,12 @@ void slm_fota_post_process(void)
 void slm_finish_modem_fota(int modem_lib_init_ret)
 {
 	int err;
+	char buf[40];
 
 	if (handle_nrf_modem_lib_init_ret(modem_lib_init_ret) ||
 	   (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM)) {
-		char buf[40];
 
-		LOG_INF("Re-initializing the modem due to"
-				" ongoing modem firmware update.");
+		LOG_INF("Re-initializing the modem due to ongoing modem firmware update.");
 
 		if (fota_type == DFU_TARGET_IMAGE_TYPE_FULL_MODEM){
 			/* Full fota activation differs from delta modem fota. */
@@ -456,8 +456,7 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 			fota_info = 0;
 			LOG_INF("Full modem firmware update succeeded. Will run new firmware");
 
-			/* Extenal flash needs to be erased and internal counters like offset
-			cleared */
+			/* Extenal flash needs to be erased and internal counters cleared */
 			err = dfu_target_reset();
 			if (err != 0) {
 				LOG_ERR("dfu_target_reset() failed: %d\n", err);

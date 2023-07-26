@@ -469,7 +469,7 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 			 * https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrfxlib/
 			 * nrf_modem/doc/delta_dfu.html
 			 * #reinitializing-the-modem-to-run-the-new-firmware
-			*/
+			 */
 			modem_lib_init_ret = nrf_modem_lib_init();
 			handle_nrf_modem_lib_init_ret(modem_lib_init_ret);
 
@@ -478,8 +478,8 @@ void slm_finish_modem_fota(int modem_lib_init_ret)
 				/* Those versions suffer from a bug that provokes UICC failure
 				 * (+CEREG: 90) after the update, preventing the modem from
 				 * registering to the network.
-				*/
-				LOG_INF("Applying the workaround to a modem firmware update issue...");
+				 */
+				LOG_INF("Applying the workaround to a modem firmware update issue");
 				nrf_modem_lib_shutdown();
 				nrf_modem_lib_init();
 			}

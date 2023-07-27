@@ -12,6 +12,7 @@
 #include <zephyr/net/tls_credentials.h>
 #include <zephyr/net/http/parser_url.h>
 #include <zephyr/device.h>
+#include <zephyr/storage/stream_flash.h>
 #include <net/fota_download.h>
 #include <dfu/dfu_target_full_modem.h>
 #include <dfu/fmfu_fdev.h>
@@ -36,7 +37,7 @@ LOG_MODULE_REGISTER(slm_fota, CONFIG_SLM_LOG_LEVEL);
 #define FOTA_FUTURE_FEATURE	0
 
 /* For extenal flash writing */
-#define FMFU_BUF_SIZE	512
+#define FMFU_BUF_SIZE	32
 
 enum slm_fota_operation {
 	SLM_FOTA_STOP = 0,
@@ -323,6 +324,12 @@ int handle_at_fota(enum at_cmd_type cmd_type)
 					LOG_ERR("Flash device %s not ready\n", flash_dev->name);
 					return -ENXIO;
 					}
+
+				/* Inside dfu_target_full_modem_cfg there is a check where the
+				 * buffer size has to be multiplication by the block size.
+				 */
+				LOG_DBG("Write block size of the external flash is %d",
+					flash_get_write_block_size(flash_dev));
 
 				err = dfu_target_full_modem_cfg(&full_modem_fota_params);
 				if (err != 0 && err != -EALREADY) {
